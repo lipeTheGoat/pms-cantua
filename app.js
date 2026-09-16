@@ -11,12 +11,12 @@ const STORAGE_KEY = "pms_cantua_v1";
    projeto > Seus apps > SDK setup and configuration). É gratuito.
    Enquanto não for preenchido, o sistema funciona só localmente (por navegador). */
 const firebaseConfig = {
-  apiKey: "COLOQUE_AQUI",
-  authDomain: "COLOQUE_AQUI.firebaseapp.com",
-  projectId: "COLOQUE_AQUI",
-  storageBucket: "COLOQUE_AQUI.appspot.com",
-  messagingSenderId: "COLOQUE_AQUI",
-  appId: "COLOQUE_AQUI",
+  apiKey: "AIzaSyBxphPlmSqTX1ekfHRGdQjJC3hAYvTlBPM",
+  authDomain: "pms-cantua.firebaseapp.com",
+  projectId: "pms-cantua",
+  storageBucket: "pms-cantua.firebasestorage.app",
+  messagingSenderId: "699423480983",
+  appId: "1:699423480983:web:f317b2a5b8265043c89dd2",
 };
 const CLOUD_DOC = { collection: "cantua", id: "state" };
 
