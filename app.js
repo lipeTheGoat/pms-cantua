@@ -714,11 +714,14 @@ function bindViewEvents() {
       openActionChooser({ roomId, checkIn, checkOut });
     };
     // drop target para realocação via arrastar
-    el.ondragover = (e) => { e.preventDefault(); el.classList.add("drop-hover"); };
-    el.ondragleave = () => el.classList.remove("drop-hover");
+    el.ondragover = (e) => {
+      e.preventDefault();
+      if (!el.classList.contains("drop-hover")) clearDropHover();
+      el.classList.add("drop-hover");
+    };
     el.ondrop = (e) => {
       e.preventDefault();
-      el.classList.remove("drop-hover");
+      clearDropHover();
       const resId = e.dataTransfer.getData("text/plain");
       handleReallocateDrop(resId, el.dataset.room, el.dataset.date);
     };
@@ -731,7 +734,7 @@ function bindViewEvents() {
       e.dataTransfer.effectAllowed = "move";
       el.classList.add("dragging");
     };
-    el.ondragend = () => el.classList.remove("dragging");
+    el.ondragend = () => { el.classList.remove("dragging"); clearDropHover(); };
   });
   document.querySelectorAll("[data-tooltip-res]").forEach(el => {
     el.addEventListener("mouseenter", (e) => showBarTooltip(el.getAttribute("data-tooltip-res"), e));
@@ -900,6 +903,12 @@ function hideBarTooltip() {
 /* ============================================================
    REALOCAÇÃO POR ARRASTAR (drag and drop) COM CONFIRMAÇÃO
    ============================================================ */
+function clearDropHover() {
+  document.querySelectorAll(".day-cell.drop-hover").forEach(el => el.classList.remove("drop-hover"));
+}
+document.addEventListener("dragend", clearDropHover);
+document.addEventListener("drop", clearDropHover);
+
 function handleReallocateDrop(resId, targetRoomId, targetDate) {
   const r = findReservation(resId);
   if (!r || !targetRoomId || !targetDate) return;
@@ -989,6 +998,7 @@ function openReservationForm(prefill, isBlock) {
   const checkIn = data.checkIn || todayISO();
   const checkOut = data.checkOut || addDays(checkIn, 1);
   const defaultPrice = data.pricePerNight != null ? data.pricePerNight : (initialRoom ? initialRoom.basePrice : 400);
+  const defaultNights = Math.max(1, daysBetween(checkIn, checkOut));
 
   const title = block ? "Bloquear quarto" : (editing ? `Editar reserva #${editing.code}` : "Nova reserva");
 
@@ -1038,7 +1048,8 @@ function openReservationForm(prefill, isBlock) {
   if (!block) {
     html += `<div class="section-title">Valores e Pagamento</div>
     <div class="form-grid">
-      <div class="field"><label>Valor da diária (R$)</label><input type="number" min="0" step="0.01" name="pricePerNight" id="fPrice" value="${defaultPrice}"></div>
+      <div class="field"><label>Valor da diária (R$)</label><input type="number" min="0" step="0.01" name="pricePerNight" id="fPrice" value="${defaultPrice}"><small id="priceHint"></small></div>
+      <div class="field"><label>Valor total das diárias (R$)</label><input type="number" min="0" step="0.01" id="fTotal" value="${+(defaultPrice * defaultNights).toFixed(2)}"><small>Preencha aqui para digitar o total em vez da diária</small></div>
       <div class="field"><label>Ajuste manual (R$)</label><input type="number" step="0.01" name="manualAdjustment" value="${data.manualAdjustment || 0}"><small>Negativo = desconto · Positivo = acréscimo</small></div>
       <div class="field"><label>Forma de pagamento</label>
         <select name="paymentMethod">
@@ -1090,14 +1101,45 @@ function openReservationForm(prefill, isBlock) {
       if (hint) hint.textContent = room ? `Taxa: ${money(room.extraBedFee)} por cama/noite` : "";
       if (autoFillPrice && !editing && room) {
         document.getElementById("fPrice").value = room.basePrice;
+        syncTotalFromPrice();
       }
     }
   }
   document.getElementById("fCategoryId").onchange = () => refreshRoomOptions(true);
   document.getElementById("fRoomId").onchange = () => syncRoomDependentFields(true);
-  document.querySelector('[name="checkIn"]').onchange = () => refreshRoomOptions(false);
-  document.querySelector('[name="checkOut"]').onchange = () => refreshRoomOptions(false);
+  document.querySelector('[name="checkIn"]').onchange = () => { refreshRoomOptions(false); syncTotalFromPrice(); };
+  document.querySelector('[name="checkOut"]').onchange = () => { refreshRoomOptions(false); syncTotalFromPrice(); };
   refreshRoomOptions(false);
+
+  function getFormNights() {
+    const ci = document.querySelector('[name="checkIn"]').value;
+    const co = document.querySelector('[name="checkOut"]').value;
+    if (!ci || !co || co <= ci) return 1;
+    return Math.max(1, daysBetween(ci, co));
+  }
+  function syncTotalFromPrice() {
+    const fTotal = document.getElementById("fTotal");
+    const fPrice = document.getElementById("fPrice");
+    if (!fTotal || !fPrice) return;
+    const nights = getFormNights();
+    fTotal.value = (+fPrice.value * nights).toFixed(2);
+    const hint = document.getElementById("priceHint");
+    if (hint) hint.textContent = nights > 1 ? `× ${nights} noites` : "";
+  }
+  function syncPriceFromTotal() {
+    const fTotal = document.getElementById("fTotal");
+    const fPrice = document.getElementById("fPrice");
+    if (!fTotal || !fPrice) return;
+    const nights = getFormNights();
+    fPrice.value = (+fTotal.value / nights).toFixed(2);
+    const hint = document.getElementById("priceHint");
+    if (hint) hint.textContent = nights > 1 ? `× ${nights} noites` : "";
+  }
+  if (!block) {
+    document.getElementById("fPrice").oninput = syncTotalFromPrice;
+    document.getElementById("fTotal").oninput = syncPriceFromTotal;
+    syncTotalFromPrice();
+  }
 
   if (!block) {
     const payStatus = document.getElementById("fPayStatus");
@@ -1221,8 +1263,9 @@ function openDetail(id) {
     <div class="action-row">
       ${!isBlock && status === "reservado" ? `<button class="btn btn-primary" data-act="checkin">${icon("check", 14)} Fazer check-in</button>` : ""}
       ${!isBlock && status === "em_casa" ? `<button class="btn btn-primary" data-act="checkout">${icon("check", 14)} Fazer check-out</button>` : ""}
-      ${!isBlock && status === "em_casa" ? `<button class="btn" data-act="conta">${icon("receipt", 14)} Conta</button>` : ""}
       ${!isBlock && status === "saiu" ? `<button class="btn btn-primary" data-act="conta">${icon("receipt", 14)} Conta / lançar consumo</button>` : ""}
+      ${!isBlock && status !== "saiu" ? `<button class="btn" data-act="conta">${icon("receipt", 14)} Conta</button>` : ""}
+      ${!isBlock && status === "em_casa" ? `<button class="btn" data-act="revertcheckin">${icon("undo", 14)} Reverter check-in</button>` : ""}
       ${!isBlock && status === "saiu" ? `<button class="btn" data-act="revert">${icon("undo", 14)} Reverter check-out</button>` : ""}
       <button class="btn" data-act="edit">${icon("pencil", 14)} Editar</button>
       ${!isBlock ? `<button class="btn" data-act="realocar">${icon("arrows", 14)} Realocar</button>` : ""}
@@ -1237,6 +1280,7 @@ function openDetail(id) {
   document.querySelector('[data-act="checkout"]')?.addEventListener("click", () => { hideModal(); openConta(r.id); });
   document.querySelector('[data-act="conta"]')?.addEventListener("click", () => { hideModal(); openConta(r.id); });
   document.querySelector('[data-act="revert"]')?.addEventListener("click", () => { doRevertCheckout(r.id); hideModal(); });
+  document.querySelector('[data-act="revertcheckin"]')?.addEventListener("click", () => { doRevertCheckin(r.id); hideModal(); });
   document.querySelector('[data-act="edit"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
   document.querySelector('[data-act="realocar"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
   document.querySelector('[data-act="remover"]')?.addEventListener("click", () => {
@@ -1257,6 +1301,19 @@ function doCheckin(id) {
   if (!r) return;
   r.checkinAt = todayISO() + "T" + new Date().toTimeString().slice(0, 5);
   saveState(); render(); toast(`Check-in de ${r.guestName} realizado.`);
+}
+function doRevertCheckin(id) {
+  const r = findReservation(id);
+  if (!r) return;
+  confirmModal({
+    title: "Reverter check-in",
+    message: `Desfazer o check-in de <b>${r.guestName} ${r.guestSurname}</b>? O status voltará para "Reservado".`,
+    confirmText: "Reverter check-in",
+    onConfirm: () => {
+      r.checkinAt = null;
+      saveState(); render(); toast(`Check-in de ${r.guestName} revertido.`);
+    }
+  });
 }
 function doRevertCheckout(id) {
   const r = findReservation(id);
