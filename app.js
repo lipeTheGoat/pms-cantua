@@ -1279,8 +1279,8 @@ function openDetail(id) {
   document.querySelector('[data-act="checkin"]')?.addEventListener("click", () => { doCheckin(r.id); hideModal(); });
   document.querySelector('[data-act="checkout"]')?.addEventListener("click", () => { hideModal(); openConta(r.id); });
   document.querySelector('[data-act="conta"]')?.addEventListener("click", () => { hideModal(); openConta(r.id); });
-  document.querySelector('[data-act="revert"]')?.addEventListener("click", () => { doRevertCheckout(r.id); hideModal(); });
-  document.querySelector('[data-act="revertcheckin"]')?.addEventListener("click", () => { doRevertCheckin(r.id); hideModal(); });
+  document.querySelector('[data-act="revert"]')?.addEventListener("click", () => { doRevertCheckout(r.id); });
+  document.querySelector('[data-act="revertcheckin"]')?.addEventListener("click", () => { doRevertCheckin(r.id); });
   document.querySelector('[data-act="edit"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
   document.querySelector('[data-act="realocar"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
   document.querySelector('[data-act="remover"]')?.addEventListener("click", () => {
