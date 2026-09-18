@@ -457,11 +457,17 @@ function renderRoomRow(room, dates) {
 
   const roomReservations = state.reservations.filter(r => r.roomId === room.id && overlaps(r.checkIn, r.checkOut, rangeStart, rangeEndExcl));
   roomReservations.forEach(r => {
-    const clipStart = r.checkIn < rangeStart ? rangeStart : r.checkIn;
-    const clipEnd = r.checkOut > rangeEndExcl ? rangeEndExcl : r.checkOut;
+    const clippedLeft = r.checkIn < rangeStart;
+    const clippedRight = r.checkOut > rangeEndExcl;
+    const clipStart = clippedLeft ? rangeStart : r.checkIn;
+    const clipEnd = clippedRight ? rangeEndExcl : r.checkOut;
     const startIdx = daysBetween(rangeStart, clipStart);
-    const span = Math.max(1, daysBetween(clipStart, clipEnd));
-    const left = (startIdx / n) * 100, width = (span / n) * 100;
+    const endIdx = daysBetween(rangeStart, clipEnd);
+    // a barra começa/termina no meio do dia de check-in/check-out (não na borda),
+    // para deixar claro que a entrada e a saída são dias distintos mesmo em 1 noite
+    const leftUnits = startIdx + (clippedLeft ? 0 : 0.5);
+    const rightUnits = endIdx + (clippedRight ? 0 : 0.5);
+    const left = (leftUnits / n) * 100, width = ((rightUnits - leftUnits) / n) * 100;
     const status = reservationStatus(r);
     const pendClass = (status !== "bloqueio" && status !== "saiu" && reservationBalance(r) > 0) ? "bar-pend" : "";
     const term = searchTerm.trim().toLowerCase();
