@@ -448,11 +448,12 @@ function renderMapaView() {
 function renderRoomRow(room, dates) {
   const n = dates.length;
   const rangeStart = dates[0], rangeEndExcl = addDays(dates[n - 1], 1);
-  let html = `<div class="room-row"><div class="name-col"><span class="rn">${room.name}</span><span class="rc">${money(room.basePrice)}/noite</span></div><div class="day-track" style="grid-template-columns:repeat(${n},1fr)">`;
+  let html = `<div class="room-row"><div class="name-col"><span class="rn">${room.name}</span><span class="rc">${money(room.basePrice)}/noite</span></div><div class="row-track-wrap"><div class="day-track" style="grid-template-columns:repeat(${n},1fr)">`;
   dates.forEach(d => {
     const isPendingStart = pendingSelection && pendingSelection.roomId === room.id && pendingSelection.date === d;
     html += `<div class="day-cell ${d === todayISO() ? "today" : ""} ${isPendingStart ? "pending-start" : ""}" data-cell data-room="${room.id}" data-date="${d}"></div>`;
   });
+  html += `</div>`;
 
   const roomReservations = state.reservations.filter(r => r.roomId === room.id && overlaps(r.checkIn, r.checkOut, rangeStart, rangeEndExcl));
   roomReservations.forEach(r => {
