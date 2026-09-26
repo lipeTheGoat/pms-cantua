@@ -255,6 +255,7 @@ function migrateState(s) {
     if (r.manualAdjustment == null) r.manualAdjustment = 0;
     if (r.charges == null) r.charges = [];
     if (r.payments == null) r.payments = [];
+    r.payments.forEach(p => { if (p.estornado == null) p.estornado = false; });
   });
   if (!s.range) s.range = { start: addDays(todayISO(), -1), days: 14 };
   if (!s.collapsedCats) s.collapsedCats = {};
@@ -306,7 +307,7 @@ function reservationExtraBedTotal(r) {
 function reservationTotal(r) {
   return reservationRoomTotal(r) + reservationChargesTotal(r) + reservationExtraBedTotal(r) + (r.manualAdjustment || 0);
 }
-function reservationPaid(r) { return (r.payments || []).reduce((s, p) => s + p.amount, 0); }
+function reservationPaid(r) { return (r.payments || []).reduce((s, p) => s + (p.estornado ? 0 : p.amount), 0); }
 function reservationBalance(r) { return +(reservationTotal(r) - reservationPaid(r)).toFixed(2); }
 
 function overlaps(aStart, aEnd, bStart, bEnd) {
@@ -1389,6 +1390,20 @@ function openConta(id) {
         <div><div class="k">Status</div><div class="v">${bal <= 0 ? "Quitado" : "Pendente"}</div></div>
       </div>
 
+      <div class="section-title">Pagamentos Registrados</div>
+      ${(r.payments || []).length ? `<table class="charges">
+        <thead><tr><th>Data</th><th>Forma</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${[...r.payments].reverse().map(p => `<tr style="${p.estornado ? "opacity:.55;" : ""}">
+            <td>${fmtBRFull(p.date)}</td>
+            <td>${p.method}</td>
+            <td style="${p.estornado ? "text-decoration:line-through;" : ""}">${money(p.amount)}</td>
+            <td>${p.estornado ? `<span class="pill pill-gray">Estornado</span>` : `<span class="pill pill-green">Válido</span>`}</td>
+            <td>${!p.estornado ? `<button type="button" class="btn btn-sm" data-estornar-pay="${p.id}">${icon("undo", 12)} Estornar</button>` : ""}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>` : `<p style="color:var(--text-light);font-size:12.5px;margin:0 0 4px;">Nenhum pagamento registrado ainda.</p>`}
+
       <div class="section-title">Registrar Pagamento</div>
       <form id="formPayment" style="display:flex;gap:8px;align-items:flex-end;">
         <div class="field" style="flex:1;"><label>Valor (R$)</label><input type="number" name="amount" step="0.01" min="0" value="${bal > 0 ? bal.toFixed(2) : ""}"></div>
@@ -1450,10 +1465,28 @@ function openConta(id) {
       const fd = new FormData(e.target);
       const amount = +fd.get("amount") || 0;
       if (amount <= 0) { toast("Informe um valor válido."); return; }
-      r.payments.push({ id: uid("pay"), amount, method: fd.get("method"), date: todayISO() });
+      r.payments.push({ id: uid("pay"), amount, method: fd.get("method"), date: todayISO(), estornado: false });
       if (reservationBalance(r) <= 0) r.paymentStatus = "pago"; else r.paymentStatus = "parcial";
       saveState(); mount(); toast("Pagamento registrado.");
     };
+    document.querySelectorAll("[data-estornar-pay]").forEach(el => {
+      el.onclick = () => {
+        const pay = (r.payments || []).find(p => p.id === el.getAttribute("data-estornar-pay"));
+        if (!pay) return;
+        confirmModal({
+          title: "Estornar pagamento",
+          message: `Estornar o pagamento de <b>${money(pay.amount)}</b> (${pay.method}, ${fmtBRFull(pay.date)})? Ele fica registrado como estornado no histórico, mas deixa de contar no total pago.`,
+          confirmText: "Estornar pagamento",
+          danger: true,
+          onConfirm: () => {
+            pay.estornado = true;
+            pay.estornadoEm = todayISO() + "T" + new Date().toTimeString().slice(0, 5);
+            if (reservationBalance(r) > 0) r.paymentStatus = reservationPaid(r) > 0 ? "parcial" : "pendente";
+            saveState(); mount(); toast("Pagamento estornado.");
+          }
+        });
+      };
+    });
     document.getElementById("btnImprimirConta").onclick = () => window.print();
     const btnFechar = document.getElementById("btnFecharConta");
     if (btnFechar) btnFechar.onclick = () => {
