@@ -1468,6 +1468,7 @@ function openVoucher(id) {
   </div>
   <div class="modal-body">
     <div class="voucher-doc">
+      <img src="Logo.png" alt="Cantuá" class="voucher-logo">
       <p style="margin-top:0;">Prezado(a) <b>${r.guestName} ${r.guestSurname || ""}</b>,</p>
 
       <div class="detail-grid" style="margin:14px 0 18px;">
