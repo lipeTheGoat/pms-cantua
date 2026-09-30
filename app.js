@@ -138,6 +138,7 @@ const ICON_PATHS = {
   check: '<path d="M20 6L9 17l-5-5"/>',
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   receipt: '<path d="M4 3h16v18l-3-2-2 2-2-2-2 2-2-2-2 2-3-2V3z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8M8 9h2"/>',
 };
 function icon(name, size) {
   return `<svg class="icon" width="${size || 15}" height="${size || 15}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[name] || ""}</svg>`;
@@ -1277,6 +1278,7 @@ function openDetail(id) {
       ${!isBlock && status === "saiu" ? `<button class="btn" data-act="revert">${icon("undo", 14)} Reverter check-out</button>` : ""}
       <button class="btn" data-act="edit">${icon("pencil", 14)} Editar</button>
       ${!isBlock ? `<button class="btn" data-act="realocar">${icon("arrows", 14)} Realocar</button>` : ""}
+      ${!isBlock ? `<button class="btn" data-act="voucher">${icon("fileText", 14)} Gerar voucher</button>` : ""}
       <span class="spacer"></span>
       <button class="btn btn-danger" data-act="remover">${icon("trash", 14)} Remover</button>
     </div>
@@ -1291,6 +1293,7 @@ function openDetail(id) {
   document.querySelector('[data-act="revertcheckin"]')?.addEventListener("click", () => { doRevertCheckin(r.id); });
   document.querySelector('[data-act="edit"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
   document.querySelector('[data-act="realocar"]')?.addEventListener("click", () => { hideModal(); openReservationForm(r); });
+  document.querySelector('[data-act="voucher"]')?.addEventListener("click", () => { hideModal(); openVoucher(r.id); });
   document.querySelector('[data-act="remover"]')?.addEventListener("click", () => {
     confirmModal({
       title: "Remover",
@@ -1335,6 +1338,158 @@ function doRevertCheckout(id) {
       saveState(); render(); toast(`Check-out de ${r.guestName} revertido.`);
     }
   });
+}
+
+/* ============================================================
+   VOUCHER DE RESERVA
+   ============================================================ */
+function voucherRulesHtml() {
+  return `
+    <p style="margin-top:0;">É com grande alegria que confirmamos a sua reserva na Pousada Cantuá. Estamos ansiosos para recebê-los e proporcionar uma estadia confortável, tranquila e memorável na Serra do Cipó.</p>
+
+    <div class="voucher-alert">ATENÇÃO: É obrigatório apresentar documentos de todos os hóspedes no momento do check-in. Em caso de crianças desacompanhadas dos pais, favor apresentar a autorização dos pais ou responsáveis.</div>
+
+    <p>Para garantir que sua experiência seja ainda mais agradável, solicitamos, por gentileza, que nos informe com antecedência caso haja alguma alergia ou restrição alimentar por intolerância ou deficiência, para que possamos atendê-lo da melhor forma possível no café da manhã.</p>
+
+    <p>A seguir, apresentamos as regras de funcionamento e informações importantes, elaboradas para assegurar o bem-estar e a boa convivência de todos os hóspedes.</p>
+
+    <div class="voucher-h3">Regras de Funcionamento Pousada Cantuá — Rede Ecovip</div>
+
+    <div class="voucher-h4">Café da Manhã</div>
+    <ul>
+      <li>Servido no estilo buffet self-service, no salão das 08:00 às 10:00.</li>
+      <li>Não é permitido comparecer sem camisa ou apenas com roupas de banho.</li>
+      <li>Não é permitido levar utensílios para as suítes ou para a área da piscina.</li>
+    </ul>
+
+    <div class="voucher-h4">Frigobar</div>
+    <ul>
+      <li>O frigobar encontra-se vazio; solicite o abastecimento na recepção.</li>
+      <li>Tudo o que for consumido da pousada será cobrado no check-out. Fique à vontade para abastecer com suas próprias bebidas e snacks, se preferir!</li>
+    </ul>
+
+    <div class="voucher-h4">Check-in e Check-out</div>
+    <ul>
+      <li>Check-in a partir das 14:00 (avise a recepção caso vá chegar após as 22h).</li>
+      <li>Check-out até as 12:00. Após esse horário, há cobrança por hora excedente (consulte na recepção). Sujeito a multa em caso de atrasos.</li>
+      <li>Entregue as chaves na recepção para conferência.</li>
+    </ul>
+
+    <div class="voucher-h4">Silêncio</div>
+    <ul>
+      <li>Mantenha a tranquilidade, especialmente após as 22:00.</li>
+      <li>Silêncio absoluto entre as 22:00 e as 08:00.</li>
+      <li>Proibido som nas áreas da pousada.</li>
+    </ul>
+
+    <div class="voucher-h4">Proibições</div>
+    <ul>
+      <li>Não utilizar churrasqueiras elétricas, grill, air fryer ou panelas elétricas nas suítes.</li>
+      <li>Fumar apenas nas áreas externas, sujeito à multa.</li>
+      <li>Não aceitamos pets; não é permitida a entrada de animais de qualquer porte.</li>
+      <li>Proibido fazer churrasco na Pousada.</li>
+      <li>Por motivos de segurança, e em conformidade com recomendações do Corpo de Bombeiros e normas de prevenção de acidentes, não é permitida a hospedagem de menores de 18 anos, em qualquer idade, nas suítes equipadas com hidromassagem.</li>
+    </ul>
+
+    <div class="voucher-h4">Manutenção</div>
+    <ul>
+      <li>A manutenção é feita diariamente, mediante solicitação na recepção até as 12:00h.</li>
+      <li>A troca de roupa de cama é feita na terceira diária (solicite se desejar antes).</li>
+      <li>Organize os objetos pessoais e não deixe toalhas no chão.</li>
+    </ul>
+
+    <div class="voucher-h4">Segurança e Economia</div>
+    <ul>
+      <li>A pousada não se responsabiliza por objetos pessoais deixados nas áreas comuns ou suítes.</li>
+      <li>Verifique se a TV, o ar-condicionado (ou o ventilador, no quarto sem ar-condicionado) e as luzes estão desligados, e se as torneiras estão bem fechadas ao sair.</li>
+    </ul>
+
+    <p>Toalhas e roupas de cama manchadas ou danificadas serão cobradas:</p>
+    <table class="voucher-price">
+      <thead><tr><th>Item</th><th>Valor</th></tr></thead>
+      <tbody>
+        <tr><td>Toalha de banho</td><td>R$ 35,00</td></tr>
+        <tr><td>Toalha de rosto</td><td>R$ 20,00</td></tr>
+        <tr><td>Lençol/virol casal</td><td>R$ 80,00</td></tr>
+        <tr><td>Lençol/virol solteiro</td><td>R$ 60,00</td></tr>
+        <tr><td>Fronha</td><td>R$ 15,00</td></tr>
+        <tr><td>Edredom/manta</td><td>R$ 180,00</td></tr>
+        <tr><td>Chave e chaveiro danificados ou perdidos</td><td>R$ 25,00</td></tr>
+      </tbody>
+    </table>
+    <div class="voucher-note">(valores de referência — confirme ou ajuste conforme a política da Cantuá)</div>
+
+    <div class="voucher-h4">Horários de Funcionamento</div>
+    <ul>
+      <li>Café da manhã: 08:00 às 10:00.</li>
+      <li>Restaurante: sexta a domingo e feriados, das 11:00 às 19:00.</li>
+      <li>Piscina aquecida (área comum): 09:00 às 21:00.</li>
+      <li>Sauna: 17:00 às 20:00 (gentileza solicitar na recepção).</li>
+      <li>Não usar bronzeador, cremes de cabelo ou descolorantes antes de entrar na piscina.</li>
+      <li>Proibido copos/objetos de vidro e alimentos na área da piscina.</li>
+    </ul>
+
+    <div class="voucher-h4">Wi-Fi</div>
+    <div class="voucher-wifi">Senha: <b>amocantua</b></div>
+
+    <div class="voucher-h3">Políticas de Cancelamento e Reagendamento</div>
+
+    <div class="voucher-h4">Política de Cancelamento</div>
+    <p>Cancelamentos com reembolso integral são permitidos até 7 dias após a efetivação da reserva, conforme o Art. 49 do Código de Defesa do Consumidor. Após esse prazo, não haverá reembolso nem concessão de créditos.</p>
+    <p>Para reservas feitas com menos de 7 dias de antecedência, porém com no mínimo 24 horas desde a realização, concedemos 50% de estorno do valor da hospedagem. Caso o sinal pago não seja equivalente a 50% do valor total, o sinal fica retido e não cobraremos o restante.</p>
+    <p>Reservas feitas com menos de 24 horas de antecedência do horário de check-in não são reembolsáveis, e o pagamento fica retido.</p>
+    <p>Em caso de no-show (não comparecimento sem aviso prévio), o valor pago não será devolvido. Casos de força maior (doença grave, falecimento, desastres naturais) poderão ser analisados mediante comprovação documental.</p>
+    <p>Após a realização do check-in e o início da hospedagem, qualquer solicitação de cancelamento das diárias remanescentes será tratada apenas como cancelamento da reserva. Nesses casos, não haverá concessão de reembolso, crédito para utilização futura, reagendamento ou qualquer outra forma de compensação financeira, independentemente do motivo da solicitação.</p>
+
+    <div class="voucher-h4">Política de Reagendamento</div>
+    <p>Reagendamentos são permitidos sem custo, com aviso prévio de ao menos 7 dias da data original do check-in. Com menos de 7 dias de antecedência, será cobrada uma taxa de R$ 150, válida para remarcação em até 90 dias.</p>
+    <p>O reagendamento será realizado com base na tarifa vigente para a nova data escolhida. Caso a reserva original tenha sido realizada com cupom de desconto, promoção ou tarifa promocional, essas condições não serão mantidas na remarcação. Será aplicado o valor vigente no período da nova reserva.</p>
+    <p>O reagendamento não reinicia nem altera a política de cancelamento da reserva. O prazo para cancelamento permanece vinculado à data da compra original, não sendo concedido um novo período de 7 dias em razão da remarcação.</p>
+    <p>Caso o hóspede não possa comparecer na data remarcada ou entrar em contato para um novo reagendamento, a reserva será considerada no-show, sem direito a novo reagendamento, concessão de créditos, reembolso ou qualquer outra compensação.</p>
+    <p>Caso a tarifa vigente da nova data seja inferior ao valor originalmente pago pela reserva, não haverá devolução da diferença. O valor já pago será considerado integralmente utilizado para a reserva remarcada, não gerando direito a reembolso, crédito ou saldo para utilização futura.</p>
+    <p>A acomodação reservada está sujeita a alteração pela pousada, conforme necessidade operacional e disponibilidade, desde que a nova acomodação seja compatível com a quantidade de hóspedes da reserva e mantenha padrão equivalente ou superior ao contratado.</p>
+    <p>Reservas realizadas para um número de hóspedes inferior à capacidade máxima da acomodação não garantem a permanência naquela categoria específica, não sendo devida qualquer compensação, desconto, crédito ou reembolso em razão dessa alteração.</p>
+    <p>Somente uma remarcação será permitida por reserva.</p>
+
+    <div class="voucher-declaration">Ao confirmar a reserva, o cliente declara estar ciente e de acordo com estas políticas.</div>
+  `;
+}
+
+function openVoucher(id) {
+  const r = findReservation(id);
+  if (!r || r.type === "bloqueio") return;
+  const room = getRoom(r.roomId);
+  const cat = room ? getCategory(room.categoryId) : null;
+
+  const html = `<div class="modal-head">
+    <div><h3>Voucher de Reserva</h3><div class="sub">${state.property.name} · Reserva #${r.code}</div></div>
+    <button class="modal-close" data-close-modal>${icon("x", 14)}</button>
+  </div>
+  <div class="modal-body">
+    <div class="voucher-doc">
+      <p style="margin-top:0;">Prezado(a) <b>${r.guestName} ${r.guestSurname || ""}</b>,</p>
+
+      <div class="detail-grid" style="margin:14px 0 18px;">
+        <div class="detail-item"><div class="k">Reserva</div><div class="v">#${r.code}</div></div>
+        <div class="detail-item"><div class="k">Acomodação</div><div class="v">${room ? room.name : "-"} ${cat ? "· " + cat.name : ""}</div></div>
+        <div class="detail-item"><div class="k">Check-in</div><div class="v">${fmtBRFull(r.checkIn)} · a partir das 14:00</div></div>
+        <div class="detail-item"><div class="k">Check-out</div><div class="v">${fmtBRFull(r.checkOut)} · até as 12:00</div></div>
+        <div class="detail-item"><div class="k">Hóspedes</div><div class="v">${r.adults} adulto(s), ${r.children} criança(s)</div></div>
+        <div class="detail-item"><div class="k">Valor total</div><div class="v">${money(reservationTotal(r))}</div></div>
+      </div>
+
+      ${voucherRulesHtml()}
+    </div>
+  </div>
+  <div class="modal-foot">
+    <div class="left">
+      <button class="btn btn-icon" id="btnImprimirVoucher" title="Imprimir / salvar em PDF">${icon("printer", 15)}</button>
+    </div>
+    <button class="btn" data-close-modal>Fechar</button>
+  </div>`;
+
+  showModal(html, "wide");
+  document.getElementById("btnImprimirVoucher").onclick = () => window.print();
 }
 
 /* ============================================================

@@ -345,8 +345,27 @@ table.charges td{padding:7px 8px;border-bottom:1px solid var(--border);}
 @media print{
   .topbar,.controls-row,.modal-foot,.action-row,.legend,.selection-banner{display:none !important;}
   .modal-overlay{position:static;background:none;padding:0;}
-  .modal{box-shadow:none;max-width:100%;}
+  .modal{box-shadow:none;max-width:100%;border:none;}
+  .modal-body{max-height:none;overflow:visible;}
+  .modal-head{background:none !important;color:var(--verde-mata) !important;border-bottom:1px solid var(--border);}
+  .modal-head .sub{color:var(--text-light) !important;}
+  .modal-close{display:none;}
 }
+
+/* ---------- Voucher ---------- */
+.voucher-doc{max-width:680px;margin:0 auto;}
+.voucher-doc p{font-size:12.5px;line-height:1.65;color:var(--text);margin:0 0 10px;}
+.voucher-alert{background:var(--amber-bg);color:var(--amber-txt);padding:11px 15px;border-radius:10px;font-size:12.5px;font-weight:700;margin:14px 0;line-height:1.5;}
+.voucher-h3{font-family:var(--font-head);font-size:19px;font-weight:700;color:var(--verde-mata);margin:26px 0 10px;padding-top:18px;border-top:1px solid var(--border);}
+.voucher-h3:first-of-type{margin-top:6px;}
+.voucher-h4{font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--terracota-dark);margin:16px 0 5px;}
+.voucher-doc ul{margin:0 0 4px;padding-left:18px;}
+.voucher-doc li{font-size:12.5px;line-height:1.65;color:var(--text);margin-bottom:2px;}
+.voucher-wifi{display:inline-flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:10px;padding:8px 14px;font-size:12.5px;margin-top:4px;}
+table.voucher-price th{text-align:left;font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.03em;padding:5px 8px;border-bottom:1px solid var(--border);}
+table.voucher-price td{font-size:12px;padding:5px 8px;border-bottom:1px solid var(--border);}
+.voucher-note{font-size:11px;color:var(--text-faint);font-style:italic;margin-top:4px;}
+.voucher-declaration{margin-top:24px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-light);font-style:italic;}
 
 @media (max-width:1024px){
   .cols3{grid-template-columns:1fr;}
