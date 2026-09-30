@@ -139,6 +139,7 @@ const ICON_PATHS = {
   users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
   receipt: '<path d="M4 3h16v18l-3-2-2 2-2-2-2 2-2-2-2 2-3-2V3z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   fileText: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8M8 9h2"/>',
+  download: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>',
 };
 function icon(name, size) {
   return `<svg class="icon" width="${size || 15}" height="${size || 15}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[name] || ""}</svg>`;
@@ -1483,13 +1484,43 @@ function openVoucher(id) {
   </div>
   <div class="modal-foot">
     <div class="left">
-      <button class="btn btn-icon" id="btnImprimirVoucher" title="Imprimir / salvar em PDF">${icon("printer", 15)}</button>
+      <button class="btn btn-icon" id="btnImprimirVoucher" title="Imprimir">${icon("printer", 15)}</button>
+      <button class="btn btn-primary" id="btnBaixarVoucher">${icon("download", 14)} Baixar PDF</button>
     </div>
     <button class="btn" data-close-modal>Fechar</button>
   </div>`;
 
   showModal(html, "wide");
   document.getElementById("btnImprimirVoucher").onclick = () => window.print();
+  document.getElementById("btnBaixarVoucher").onclick = (e) => {
+    const el = document.querySelector(".voucher-doc");
+    if (!el || typeof window.html2pdf !== "function") {
+      toast("Gerador de PDF indisponível no momento — tente Imprimir > Salvar como PDF.");
+      return;
+    }
+    const btn = e.currentTarget;
+    const originalLabel = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = "Gerando PDF...";
+    const guestSlug = (r.guestName + "-" + (r.guestSurname || "")).trim().replace(/\s+/g, "-");
+    const filename = `Voucher-Cantua-${r.code}-${guestSlug}.pdf`;
+    window.html2pdf()
+      .set({
+        margin: [12, 12, 16, 12],
+        filename,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ["css", "legacy"] },
+      })
+      .from(el)
+      .save()
+      .then(() => { btn.disabled = false; btn.innerHTML = originalLabel; })
+      .catch(() => {
+        btn.disabled = false; btn.innerHTML = originalLabel;
+        toast("Não foi possível gerar o PDF. Tente Imprimir > Salvar como PDF.");
+      });
+  };
 }
 
 /* ============================================================
