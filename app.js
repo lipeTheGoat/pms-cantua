@@ -1505,20 +1505,24 @@ function openVoucher(id) {
     btn.innerHTML = "Gerando PDF...";
     const guestSlug = (r.guestName + "-" + (r.guestSurname || "")).trim().replace(/\s+/g, "-");
     const filename = `Voucher-Cantua-${r.code}-${guestSlug}.pdf`;
+    // corrige espaço em branco no início do PDF causado pela posição de rolagem da página
+    const scrollX = window.scrollX, scrollY = window.scrollY;
+    window.scrollTo(0, 0);
     window.html2pdf()
       .set({
         margin: [12, 12, 16, 12],
         filename,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", scrollX: 0, scrollY: 0 },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ["css", "legacy"] },
+        pagebreak: { mode: ["css"] },
       })
       .from(el)
       .save()
-      .then(() => { btn.disabled = false; btn.innerHTML = originalLabel; })
+      .then(() => { btn.disabled = false; btn.innerHTML = originalLabel; window.scrollTo(scrollX, scrollY); })
       .catch(() => {
         btn.disabled = false; btn.innerHTML = originalLabel;
+        window.scrollTo(scrollX, scrollY);
         toast("Não foi possível gerar o PDF. Tente Imprimir > Salvar como PDF.");
       });
   };
