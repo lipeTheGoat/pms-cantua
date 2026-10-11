@@ -4,7 +4,10 @@
    Firestore (sincronização em tempo real entre toda a equipe).
    ============================================================ */
 
+import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261011a";
+
 const STORAGE_KEY = "pms_cantua_v1";
+const APP_VERSION = "20261011a";
 
 /* ================= Sincronização em nuvem (Firebase Firestore) =================
    Preencha com as credenciais do seu projeto Firebase (Configurações do
@@ -31,34 +34,52 @@ async function initCloudSync() {
     return;
   }
   try {
-    const [{ initializeApp }, { getFirestore, doc, onSnapshot, setDoc, getDoc }] = await Promise.all([
+    const [{ initializeApp }, fs] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"),
     ]);
     const fbApp = initializeApp(firebaseConfig);
-    cloudDb = getFirestore(fbApp);
-    cloudDocRef = doc(cloudDb, CLOUD_DOC.collection, CLOUD_DOC.id);
-    cloudFns = { doc, onSnapshot, setDoc, getDoc };
+    cloudDb = fs.getFirestore(fbApp);
+    cloudDocRef = fs.doc(cloudDb, CLOUD_DOC.collection, CLOUD_DOC.id);
+    cloudFns = {
+      doc: fs.doc, onSnapshot: fs.onSnapshot, setDoc: fs.setDoc, getDoc: fs.getDoc,
+      collection: fs.collection, query: fs.query, orderBy: fs.orderBy, limit: fs.limit,
+      serverTimestamp: fs.serverTimestamp,
+    };
 
     setSyncStatus("syncing", "Conectando...");
     const snap = await cloudFns.getDoc(cloudDocRef);
     if (snap.exists()) {
+      const ui = { range: state.range, collapsedCats: state.collapsedCats };
       state = migrateState(snap.data());
+      if (ui.range) state.range = ui.range;
+      if (ui.collapsedCats) state.collapsedCats = ui.collapsedCats;
     } else {
       await cloudFns.setDoc(cloudDocRef, state);
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    snapshotNow();
     cloudEnabled = true;
     setSyncStatus("online", "Sincronizado com a equipe");
     render();
+    scheduleFlush(200);
+    if (currentView === "historico") startHistoryListener();
 
     cloudFns.onSnapshot(cloudDocRef, (snap2) => {
       if (!snap2.exists()) return;
-      const incoming = snap2.data();
-      if (JSON.stringify(incoming) === JSON.stringify(state)) return;
+      if (snap2.metadata.hasPendingWrites) return; // eco das nossas próprias gravações
+      const next = migrateState(snap2.data());
+      if (stableStringify(stripUi(next)) === stableStringify(stripUi(state))) return;
+      if (!pushPending) {
+        try { observeRemoteRemovals(state, next); } catch (err) { console.error(err); }
+      }
       applyingRemoteUpdate = true;
-      state = migrateState(incoming);
+      // a posição do calendário é de cada pessoa: não é sobrescrita por outros aparelhos
+      next.range = state.range || next.range;
+      next.collapsedCats = state.collapsedCats || next.collapsedCats;
+      state = next;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      snapshotNow();
       render();
       applyingRemoteUpdate = false;
       setSyncStatus("online", "Sincronizado com a equipe");
@@ -71,14 +92,18 @@ async function initCloudSync() {
 let cloudFns = null;
 
 let pushTimer = null;
+let pushPending = false;
+let pushSeq = 0;
 function pushToCloud() {
   if (!cloudEnabled || applyingRemoteUpdate) return;
   setSyncStatus("syncing", "Salvando...");
+  const seq = ++pushSeq;
+  pushPending = true;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     cloudFns.setDoc(cloudDocRef, state)
-      .then(() => setSyncStatus("online", "Sincronizado com a equipe"))
-      .catch(() => setSyncStatus("offline", "Sem conexão com a nuvem"));
+      .then(() => { if (seq === pushSeq) pushPending = false; setSyncStatus("online", "Sincronizado com a equipe"); scheduleFlush(100); })
+      .catch(() => { if (seq === pushSeq) pushPending = false; setSyncStatus("offline", "Sem conexão com a nuvem"); });
   }, 500);
 }
 function setSyncStatus(kind, label) {
@@ -86,6 +111,311 @@ function setSyncStatus(kind, label) {
   if (!el) return;
   el.className = "sync-status " + kind;
   el.textContent = label;
+}
+
+/* ================= Quem está usando o sistema ================= */
+const USER_KEY = "pms_cantua_user";
+const DEVICE_KEY = "pms_cantua_device";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const getUserName = () => (localStorage.getItem(USER_KEY) || "").trim();
+function setUserName(name) { localStorage.setItem(USER_KEY, name.trim()); updateUserChip(); }
+function deviceId() {
+  let d = localStorage.getItem(DEVICE_KEY);
+  if (!d) { d = "disp_" + Math.random().toString(36).slice(2, 8); localStorage.setItem(DEVICE_KEY, d); }
+  return d;
+}
+function updateUserChip() {
+  const name = getUserName();
+  const label = document.getElementById("userLabel"), av = document.getElementById("userAvatar");
+  if (label) label.textContent = name ? `Olá, ${name}` : "Quem é você?";
+  if (av) av.textContent = name ? name.split(/\s+/).slice(0, 2).map(p => p[0]).join("").toUpperCase() : "?";
+}
+let modalLocked = false;
+function openNameModal(locked) {
+  const html = `<div class="modal-head">
+    <div><h3>${locked ? "Quem está usando o sistema?" : "Trocar usuário"}</h3>
+    <div class="sub">Seu nome fica registrado em todas as alterações feitas neste aparelho.</div></div>
+    ${locked ? "" : `<button class="modal-close" data-close-modal>${icon("x", 14)}</button>`}
+  </div>
+  <form id="nameForm">
+    <div class="modal-body"><div class="field"><label>Seu nome</label><input type="text" name="userName" required maxlength="40" value="${esc(getUserName())}" placeholder="Ex.: Maria"></div></div>
+    <div class="modal-foot">${locked ? "" : `<button type="button" class="btn" data-close-modal>Cancelar</button>`}<button type="submit" class="btn btn-primary">Salvar</button></div>
+  </form>`;
+  showModal(html, "narrow");
+  modalLocked = !!locked;
+  const f = document.getElementById("nameForm");
+  f.querySelector("[name=userName]").focus();
+  f.onsubmit = (ev) => {
+    ev.preventDefault();
+    const v = f.querySelector("[name=userName]").value.trim();
+    if (!v) return;
+    setUserName(v);
+    modalLocked = false;
+    hideModal();
+    toast(`Olá, ${v}!`);
+  };
+}
+
+/* ================= Histórico de alterações ================= */
+const LOG_COLLECTION = "cantua_log";
+const PENDING_KEY = "pms_cantua_log_pending";
+const RULES_TEXT = `rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /cantua/state {
+      allow read, create, update: if true;
+      allow delete: if false;
+    }
+    match /cantua_log/{entry} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+  }
+}`;
+let logPending = (() => { try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]"); } catch (e) { return []; } })();
+const savePending = () => { try { localStorage.setItem(PENDING_KEY, JSON.stringify(logPending)); } catch (e) { console.error(e); } };
+let logFlushing = false, logFlushTimer = null, logRulesOk = null, warnedRules = false;
+
+let prevSnapshot = null;
+function snapshotNow() { prevSnapshot = JSON.parse(JSON.stringify(state)); }
+function recordChanges() {
+  if (!prevSnapshot) { snapshotNow(); return; }
+  const entries = diffState(prevSnapshot, state);
+  snapshotNow();
+  entries.forEach(logEvent);
+}
+function observeRemoteRemovals(local, next) {
+  removalsOnly(diffState(stripUi(local), stripUi(next))).forEach(e => {
+    logEvent({ ...e, summary: e.summary + " (detectado vindo de outro aparelho)", data: { ...(e.data || {}), observed: true } });
+  });
+}
+
+function logEvent(e) {
+  const entry = {
+    id: e.id || uid("log"),
+    type: e.type,
+    summary: e.summary,
+    data: e.data ? JSON.parse(JSON.stringify(e.data)) : null,
+    user: getUserName() || "Sem identificação",
+    device: deviceId(),
+    at: new Date().toISOString(),
+    ver: APP_VERSION,
+  };
+  if (logPending.some(x => x.id === entry.id)) return;
+  logPending.push(entry);
+  savePending();
+  scheduleFlush();
+  if (currentView === "historico") { renderHistoryRows(); updateHistoryBanner(); }
+}
+function scheduleFlush(delay = 400) { clearTimeout(logFlushTimer); logFlushTimer = setTimeout(flushLog, delay); }
+async function flushLog() {
+  if (logFlushing || !cloudEnabled || !cloudFns || !logPending.length) { updateHistoryBanner(); return; }
+  logFlushing = true;
+  try {
+    for (const entry of [...logPending]) {
+      const ref = cloudFns.doc(cloudDb, LOG_COLLECTION, entry.id);
+      try {
+        const existing = await cloudFns.getDoc(ref);
+        if (!existing.exists()) await cloudFns.setDoc(ref, { ...entry, ts: cloudFns.serverTimestamp() });
+      } catch (err) {
+        if (err && err.code === "permission-denied") {
+          let exists = false;
+          try { exists = (await cloudFns.getDoc(ref)).exists(); } catch (e2) { /* sem acesso */ }
+          if (!exists) {
+            logRulesOk = false;
+            if (!warnedRules) { warnedRules = true; toast("Histórico aguardando liberação no banco — veja a aba Histórico."); }
+            break;
+          }
+        } else { break; }
+      }
+      logPending = logPending.filter(x => x.id !== entry.id);
+      savePending();
+      logRulesOk = true;
+    }
+  } finally {
+    logFlushing = false;
+    updateHistoryBanner();
+    if (logPending.length) scheduleFlush(30000);
+  }
+}
+
+/* ---------- leitura do histórico (aba Histórico) ---------- */
+let histRemote = [], histUnsub = null, histLimit = 300, histError = null;
+const histFilter = { q: "", group: "", user: "", onlyDanger: false };
+
+function startHistoryListener() {
+  if (histUnsub || !cloudEnabled || !cloudFns) return;
+  const q = cloudFns.query(cloudFns.collection(cloudDb, LOG_COLLECTION), cloudFns.orderBy("ts", "desc"), cloudFns.limit(histLimit));
+  histUnsub = cloudFns.onSnapshot(q, snap => {
+    histError = null;
+    histRemote = snap.docs.map(d => ({ ...d.data({ serverTimestamps: "estimate" }), id: d.id }));
+    if (currentView === "historico") { renderHistoryRows(); updateHistoryBanner(); }
+  }, err => {
+    histError = (err && err.code) || "erro";
+    if (currentView === "historico") updateHistoryBanner();
+  });
+}
+function stopHistoryListener() { if (histUnsub) { histUnsub(); histUnsub = null; } }
+
+function mergedHistory() {
+  const map = new Map();
+  histRemote.forEach(e => map.set(e.id, e));
+  logPending.forEach(e => { if (!map.has(e.id)) map.set(e.id, { ...e, _pending: true }); });
+  return [...map.values()].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+}
+function filteredHistory() {
+  const q = histFilter.q.trim().toLowerCase();
+  return mergedHistory().filter(e =>
+    (!histFilter.group || groupOf(e.type) === histFilter.group) &&
+    (!histFilter.user || e.user === histFilter.user) &&
+    (!histFilter.onlyDanger || isDanger(e.type)) &&
+    (!q || (e.summary || "").toLowerCase().includes(q) || (e.user || "").toLowerCase().includes(q)));
+}
+
+function renderHistoricoView() {
+  return `<div class="page-head">
+    <div><div class="page-title">Histórico</div><div class="page-subtitle">Tudo que foi alterado no sistema: quem fez, quando e o quê.</div></div>
+    <button class="btn" id="btnExportLog">${icon("download", 14)} Exportar CSV</button>
+  </div>
+  <div id="histBanner"></div>
+  <div class="controls-row">
+    <div class="field search-field">${icon("search")}<input type="text" id="histSearch" placeholder="Buscar (quarto, hóspede, valor...)" value="${esc(histFilter.q)}"></div>
+    <div class="field"><select id="histGroup"><option value="">Todos os tipos</option>${Object.entries(GROUP_LABEL).map(([k, v]) => `<option value="${k}" ${histFilter.group === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+    <div class="field"><select id="histUser"></select></div>
+    <label class="tag-checkbox"><input type="checkbox" id="histDanger" ${histFilter.onlyDanger ? "checked" : ""}> Só remoções e estornos</label>
+    <div class="toolbar-spacer"></div>
+    <span class="page-subtitle" id="histCount" style="margin:0;"></span>
+  </div>
+  <div id="histRows"></div>`;
+}
+
+function histRowHtml(e) {
+  const g = groupOf(e.type), danger = isDanger(e.type);
+  const when = new Date(e.at);
+  const d = isNaN(when) ? "" : when.toLocaleDateString("pt-BR") + " " + when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const before = e.data && e.data.before;
+  let action = "";
+  if (/\.remove$/.test(e.type) && before && before.id && ["room", "category", "product", "reservation", "block"].includes(g)) {
+    const exists = g === "room" ? getRoom(before.id) : g === "category" ? getCategory(before.id)
+      : g === "product" ? state.catalog.find(p => p.id === before.id) : findReservation(before.id);
+    action = exists ? `<span class="hist-meta">já existe</span>` : `<button class="btn btn-sm" data-restore-log="${esc(e.id)}">${icon("undo", 12)} Restaurar</button>`;
+  }
+  return `<div class="hist-row ${danger ? "danger" : ""}">
+    <div class="hist-when">${esc(d)}</div>
+    <div class="hist-main">
+      <span class="pill ${danger ? "pill-amber" : "pill-gray"}">${esc(GROUP_LABEL[g] || g)}</span>
+      <span class="hist-sum">${esc(e.summary)}</span>
+      <div class="hist-meta">por <b>${esc(e.user || "?")}</b>${e.data && e.data.observed ? " · detectado vindo de outro aparelho" : ""}${e._pending ? " · aguardando envio" : ""}${e.device ? " · " + esc(e.device) : ""}</div>
+    </div>
+    <div class="hist-act">${action}</div>
+  </div>`;
+}
+
+function renderHistoryRows() {
+  const box = document.getElementById("histRows");
+  if (!box) return;
+  const sel = document.getElementById("histUser");
+  if (sel) {
+    const users = [...new Set(mergedHistory().map(e => e.user).filter(Boolean))].sort();
+    sel.innerHTML = `<option value="">Todos os usuários</option>` + users.map(u => `<option value="${esc(u)}" ${histFilter.user === u ? "selected" : ""}>${esc(u)}</option>`).join("");
+  }
+  const all = filteredHistory();
+  const cnt = document.getElementById("histCount");
+  if (cnt) cnt.textContent = `${all.length} registro(s)`;
+  if (!all.length) { box.innerHTML = `<div class="empty-msg">Nenhum registro encontrado.</div>`; return; }
+  box.innerHTML = all.slice(0, 500).map(histRowHtml).join("") +
+    (histRemote.length >= histLimit ? `<div style="padding:16px 0;"><button class="btn btn-sm" id="btnHistMore">Carregar mais antigos</button></div>` : "");
+  box.querySelectorAll("[data-restore-log]").forEach(b => { b.onclick = () => restoreFromLog(b.getAttribute("data-restore-log")); });
+  const more = document.getElementById("btnHistMore");
+  if (more) more.onclick = () => { histLimit += 300; stopHistoryListener(); startHistoryListener(); };
+}
+
+function updateHistoryBanner() {
+  const el = document.getElementById("histBanner");
+  if (!el) return;
+  const n = logPending.length;
+  if (logRulesOk === false || histError === "permission-denied") {
+    el.innerHTML = `<div class="hist-banner warn"><div><b>O histórico ainda não está liberado no banco de dados.</b> As alterações estão sendo guardadas neste aparelho (${n} aguardando envio) e vão para o banco assim que as regras do Firebase forem atualizadas.</div><button class="btn btn-sm" id="btnShowRules">Ver regras para colar</button></div>`;
+    document.getElementById("btnShowRules").onclick = openRulesModal;
+  } else if (!cloudEnabled) {
+    el.innerHTML = `<div class="hist-banner">Sem conexão com a nuvem — mostrando só os registros deste aparelho (${n}).</div>`;
+  } else if (n) {
+    el.innerHTML = `<div class="hist-banner">${n} registro(s) sendo enviados...</div>`;
+  } else {
+    el.innerHTML = "";
+  }
+}
+function openRulesModal() {
+  const html = `<div class="modal-head">
+    <div><h3>Liberar o histórico no banco</h3><div class="sub">Passo único, leva 1 minuto.</div></div>
+    <button class="modal-close" data-close-modal>${icon("x", 14)}</button></div>
+  <div class="modal-body">
+    <ol style="margin:0 0 14px;padding-left:18px;font-size:12.5px;line-height:1.8;">
+      <li>Abra <b>console.firebase.google.com</b> e entre no projeto <b>pms-cantua</b></li>
+      <li>Vá em <b>Firestore Database → aba Regras</b></li>
+      <li>Apague tudo, cole o texto abaixo e clique em <b>Publicar</b></li>
+    </ol>
+    <pre class="rules-pre">${esc(RULES_TEXT)}</pre>
+  </div>
+  <div class="modal-foot"><button class="btn" data-close-modal>Fechar</button><button class="btn btn-primary" id="btnCopyRules">${icon("fileText", 14)} Copiar regras</button></div>`;
+  showModal(html, false);
+  document.getElementById("btnCopyRules").onclick = () => {
+    (navigator.clipboard ? navigator.clipboard.writeText(RULES_TEXT) : Promise.reject()).then(
+      () => toast("Regras copiadas."), () => toast("Não consegui copiar — selecione o texto e copie manualmente."));
+  };
+}
+
+function bindHistoryEvents() {
+  renderHistoryRows();
+  updateHistoryBanner();
+  document.getElementById("histSearch").oninput = e => { histFilter.q = e.target.value; renderHistoryRows(); };
+  document.getElementById("histGroup").onchange = e => { histFilter.group = e.target.value; renderHistoryRows(); };
+  document.getElementById("histUser").onchange = e => { histFilter.user = e.target.value; renderHistoryRows(); };
+  document.getElementById("histDanger").onchange = e => { histFilter.onlyDanger = e.target.checked; renderHistoryRows(); };
+  document.getElementById("btnExportLog").onclick = exportHistoryCsv;
+}
+
+function exportHistoryCsv() {
+  const safe = v => { v = String(v ?? ""); return /^[=+\-@]/.test(v) ? "'" + v : v; };
+  const q = v => `"${safe(v).replace(/"/g, '""')}"`;
+  const lines = [["Data/hora", "Usuário", "Tipo", "Descrição", "Aparelho"].map(q).join(";")];
+  filteredHistory().forEach(e => lines.push([new Date(e.at).toLocaleString("pt-BR"), e.user, GROUP_LABEL[groupOf(e.type)] || e.type, e.summary, e.device].map(q).join(";")));
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `historico-cantua-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function restoreFromLog(id) {
+  const e = mergedHistory().find(x => x.id === id);
+  const b = e && e.data && e.data.before;
+  if (!b || !b.id) return;
+  const g = groupOf(e.type);
+  let label = "", apply = null;
+  if (g === "room") {
+    if (getRoom(b.id)) return toast("Esse quarto já existe.");
+    if (!getCategory(b.categoryId)) return toast("A categoria desse quarto não existe mais — restaure a categoria primeiro.");
+    label = `o quarto <b>${esc(b.name)}</b>`; apply = () => state.rooms.push(b);
+  } else if (g === "category") {
+    if (getCategory(b.id)) return toast("Essa categoria já existe.");
+    label = `a categoria <b>${esc(b.name)}</b>`; apply = () => state.categories.push(b);
+  } else if (g === "product") {
+    if (state.catalog.some(p => p.id === b.id)) return toast("Esse produto já existe.");
+    label = `o produto <b>${esc(b.name)}</b>`; apply = () => state.catalog.push(b);
+  } else if (g === "reservation" || g === "block") {
+    if (findReservation(b.id)) return toast("Essa reserva já existe.");
+    if (!getRoom(b.roomId)) return toast("O quarto dessa reserva não existe mais — restaure o quarto primeiro.");
+    if (!roomIsFree(b.roomId, b.checkIn, b.checkOut)) return toast("O quarto já está ocupado nesse período — não dá para restaurar sem conflito.");
+    label = g === "block" ? "o <b>bloqueio</b>" : `a reserva <b>#${esc(b.code)} ${esc(b.guestName)}</b>`; apply = () => state.reservations.push(b);
+  } else return;
+  confirmModal({
+    title: "Restaurar item removido",
+    message: `Recolocar ${label} no sistema exatamente como estava antes de ser removido?`,
+    confirmText: "Restaurar",
+    onConfirm: () => { apply(); saveState(); render(); toast("Item restaurado."); },
+  });
 }
 
 /* ---------- Catálogo padrão (usado só na primeira instalação) ---------- */
@@ -275,8 +605,13 @@ function loadState() {
   } catch (e) { /* ignore corrupt storage */ }
   return seedState();
 }
-function saveState() {
+function saveLocal() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+/* Salva e registra no histórico tudo que mudou desde o último estado conhecido. */
+function saveState() {
+  saveLocal();
+  try { recordChanges(); } catch (e) { console.error("histórico:", e); }
   pushToCloud();
 }
 
@@ -341,6 +676,7 @@ let pendingSelection = null; // {roomId, date} — 1º clique da seleção de pe
 function setView(view) {
   currentView = view;
   pendingSelection = null;
+  if (view === "historico") startHistoryListener(); else stopHistoryListener();
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.view === view));
   render();
 }
@@ -351,6 +687,7 @@ function render() {
   const app = document.getElementById("app");
   if (currentView === "mapa") app.innerHTML = renderMapaView();
   else if (currentView === "emcasa") app.innerHTML = renderEmCasaView();
+  else if (currentView === "historico") app.innerHTML = renderHistoricoView();
   else app.innerHTML = renderConfigView();
   bindViewEvents();
 }
@@ -677,17 +1014,18 @@ function renderConfigView() {
    EVENTOS DA VIEW ATUAL
    ============================================================ */
 function bindViewEvents() {
+  if (currentView === "historico") bindHistoryEvents();
   // Mapa
   const btnPrev = document.getElementById("btnPrevWeek");
-  if (btnPrev) btnPrev.onclick = () => { state.range.start = addDays(state.range.start, -7); saveState(); render(); };
+  if (btnPrev) btnPrev.onclick = () => { state.range.start = addDays(state.range.start, -7); saveLocal(); render(); };
   const btnNext = document.getElementById("btnNextWeek");
-  if (btnNext) btnNext.onclick = () => { state.range.start = addDays(state.range.start, 7); saveState(); render(); };
+  if (btnNext) btnNext.onclick = () => { state.range.start = addDays(state.range.start, 7); saveLocal(); render(); };
   const btnHoje = document.getElementById("btnHoje");
-  if (btnHoje) btnHoje.onclick = () => { state.range.start = addDays(todayISO(), -1); saveState(); render(); };
+  if (btnHoje) btnHoje.onclick = () => { state.range.start = addDays(todayISO(), -1); saveLocal(); render(); };
   const jumpDate = document.getElementById("jumpDate");
-  if (jumpDate) jumpDate.onchange = (e) => { state.range.start = e.target.value; saveState(); render(); };
+  if (jumpDate) jumpDate.onchange = (e) => { state.range.start = e.target.value; saveLocal(); render(); };
   const daysVisible = document.getElementById("daysVisible");
-  if (daysVisible) daysVisible.onchange = (e) => { state.range.days = +e.target.value; saveState(); render(); };
+  if (daysVisible) daysVisible.onchange = (e) => { state.range.days = +e.target.value; saveLocal(); render(); };
   const searchGuest = document.getElementById("searchGuest");
   if (searchGuest) {
     searchGuest.oninput = (e) => { searchTerm = e.target.value; renderSearchOnly(); };
@@ -703,7 +1041,7 @@ function bindViewEvents() {
     el.onclick = () => {
       const id = el.getAttribute("data-toggle-cat");
       state.collapsedCats[id] = !state.collapsedCats[id];
-      saveState(); render();
+      saveLocal(); render();
     };
   });
 
@@ -856,7 +1194,7 @@ function bindViewEvents() {
       title: "Restaurar dados de exemplo",
       message: "Isso vai apagar todos os dados atuais e recarregar os dados de exemplo. Deseja continuar?",
       danger: true,
-      onConfirm: () => { state = seedState(); saveState(); render(); toast("Dados restaurados."); }
+      onConfirm: () => { logEvent({ type: "system.reset", summary: "TODOS OS DADOS foram substituídos pelos dados de exemplo (botão Restaurar dados de exemplo)", data: { before: state } }); state = seedState(); saveState(); render(); toast("Dados restaurados."); }
     });
   };
 }
@@ -950,8 +1288,10 @@ function showModal(html, sizeClass) {
   content.className = "modal" + (sizeClass ? " " + sizeClass : "");
   content.innerHTML = html;
   overlay.classList.remove("hidden");
+  modalLocked = false;
 }
 function hideModal() {
+  if (modalLocked) return;
   document.getElementById("modalOverlay").classList.add("hidden");
   document.getElementById("modalContent").innerHTML = "";
 }
@@ -1715,13 +2055,19 @@ function openConta(id) {
 function init() {
   state = loadState();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  snapshotNow();
 
   document.querySelectorAll(".tab").forEach(t => {
     t.addEventListener("click", () => setView(t.dataset.view));
   });
+  const chip = document.getElementById("userChip");
+  if (chip) chip.addEventListener("click", () => openNameModal(false));
+  updateUserChip();
 
   render();
   initCloudSync();
+  if (!getUserName()) openNameModal(true);
+  if (logPending.length) scheduleFlush(2000);
 }
 
 document.addEventListener("DOMContentLoaded", init);
