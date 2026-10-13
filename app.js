@@ -4,10 +4,10 @@
    Firestore (sincronização em tempo real entre toda a equipe).
    ============================================================ */
 
-import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261011a";
+import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261013a";
 
 const STORAGE_KEY = "pms_cantua_v1";
-const APP_VERSION = "20261011a";
+const APP_VERSION = "20261013a";
 
 /* ================= Sincronização em nuvem (Firebase Firestore) =================
    Preencha com as credenciais do seu projeto Firebase (Configurações do
@@ -1403,7 +1403,7 @@ function openReservationForm(prefill, isBlock) {
       <div class="field"><label>Ajuste manual (R$)</label><input type="number" step="0.01" name="manualAdjustment" value="${data.manualAdjustment || 0}"><small>Negativo = desconto · Positivo = acréscimo</small></div>
       <div class="field"><label>Forma de pagamento</label>
         <select name="paymentMethod">
-          ${["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência/Depósito", "Faturado", "Cortesia", "Permuta"].map(o => `<option ${data.paymentMethod === o ? "selected" : ""}>${o}</option>`).join("")}
+          ${["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência/Depósito", "Faturado Booking", "Faturado", "Cortesia", "Permuta"].map(o => `<option ${data.paymentMethod === o ? "selected" : ""}>${o}</option>`).join("")}
         </select>
       </div>
       <div class="field"><label>Status do pagamento</label>
@@ -1939,7 +1939,7 @@ function openConta(id) {
       <form id="formPayment" style="display:flex;gap:8px;align-items:flex-end;">
         <div class="field" style="flex:1;"><label>Valor (R$)</label><input type="number" name="amount" step="0.01" min="0" value="${bal > 0 ? bal.toFixed(2) : ""}"></div>
         <div class="field" style="flex:1;"><label>Forma de pagamento</label>
-          <select name="method">${["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência/Depósito"].map(o => `<option>${o}</option>`).join("")}</select>
+          <select name="method">${["Pix", "Dinheiro", "Cartão de Crédito", "Cartão de Débito", "Transferência/Depósito", "Faturado Booking"].map(o => `<option>${o}</option>`).join("")}</select>
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Registrar Pagamento</button>
       </form>
