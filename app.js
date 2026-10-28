@@ -4,10 +4,10 @@
    Firestore (sincronização em tempo real entre toda a equipe).
    ============================================================ */
 
-import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261013a";
+import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261028a";
 
 const STORAGE_KEY = "pms_cantua_v1";
-const APP_VERSION = "20261013a";
+const APP_VERSION = "20261028a";
 
 /* ================= Sincronização em nuvem (Firebase Firestore) =================
    Preencha com as credenciais do seu projeto Firebase (Configurações do
@@ -733,7 +733,8 @@ function renderMapaView() {
     <div class="toolbar-spacer"></div>
     <div class="field search-field">
       ${icon("search")}
-      <input type="text" id="searchGuest" placeholder="Buscar hóspede ou nº da reserva" value="${searchTerm}" />
+      <input type="text" id="searchGuest" placeholder="Buscar nome, telefone, documento ou nº da reserva" value="${esc(searchTerm)}" autocomplete="off" />
+      <div class="search-results hidden" id="searchResults"></div>
     </div>
     <button class="btn btn-sm" id="btnBloqueio">${icon("lock", 13)} Bloquear quarto</button>
   </div>`;
@@ -810,10 +811,8 @@ function renderRoomRow(room, dates) {
     const left = (leftUnits / n) * 100, width = ((rightUnits - leftUnits) / n) * 100;
     const status = reservationStatus(r);
     const pendClass = (status !== "bloqueio" && status !== "saiu" && reservationBalance(r) > 0) ? "bar-pend" : "";
-    const term = searchTerm.trim().toLowerCase();
-    const guestFull = (r.guestName + " " + r.guestSurname).toLowerCase();
     let matchClass = "";
-    if (term) matchClass = (guestFull.includes(term) || String(r.code).includes(term)) ? "hl" : "dim";
+    if (searchTerm.trim()) matchClass = reservationMatches(r, searchTerm) ? "hl" : "dim";
     const label = r.type === "bloqueio" ? (icon("lock", 11) + " Bloqueado") : (r.guestName + " " + r.guestSurname);
     const draggable = status !== "saiu";
     html += `<div class="bar bar-status-${status} ${pendClass} ${matchClass}" style="left:${left}%;width:calc(${width}% - 4px)" data-open-res="${r.id}" data-tooltip-res="${r.id}" ${draggable ? 'draggable="true"' : ''}>${label}</div>`;
@@ -1029,6 +1028,8 @@ function bindViewEvents() {
   const searchGuest = document.getElementById("searchGuest");
   if (searchGuest) {
     searchGuest.oninput = (e) => { searchTerm = e.target.value; renderSearchOnly(); };
+    searchGuest.onfocus = () => renderSearchResults();
+    searchGuest.onkeydown = (e) => { if (e.key === "Escape") { const b = document.getElementById("searchResults"); if (b) b.classList.add("hidden"); } };
   }
   const btnNovaReserva = document.getElementById("btnNovaReserva");
   if (btnNovaReserva) btnNovaReserva.onclick = () => openReservationForm();
@@ -1199,16 +1200,61 @@ function bindViewEvents() {
   };
 }
 
-// Re-renderiza só as classes de destaque da busca, sem perder o foco do campo
+// A busca encontra por nome, nº da reserva, telefone, e-mail, documento ou quarto
+const onlyDigits = v => String(v || "").replace(/\D/g, "");
+const plain = v => String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function reservationMatches(r, rawTerm) {
+  const term = plain(rawTerm.trim());
+  if (!term) return false;
+  const room = getRoom(r.roomId);
+  const text = plain([r.guestName, r.guestSurname, r.guestEmail, room && room.name, r.code].join(" "));
+  if (text.includes(term)) return true;
+  const digits = onlyDigits(term);
+  return digits.length >= 3 && (onlyDigits(r.guestPhone).includes(digits) || onlyDigits(r.guestDocument).includes(digits));
+}
+
+// Re-renderiza só as classes de destaque e a lista de resultados, sem perder o foco do campo
 function renderSearchOnly() {
   document.querySelectorAll(".bar[data-open-res]").forEach(el => {
-    const id = el.getAttribute("data-open-res");
-    const r = findReservation(id);
+    const r = findReservation(el.getAttribute("data-open-res"));
     if (!r) return;
-    const term = searchTerm.trim().toLowerCase();
-    const guestFull = (r.guestName + " " + r.guestSurname).toLowerCase();
     el.classList.remove("hl", "dim");
-    if (term) el.classList.add((guestFull.includes(term) || String(r.code).includes(term)) ? "hl" : "dim");
+    if (searchTerm.trim()) el.classList.add(reservationMatches(r, searchTerm) ? "hl" : "dim");
+  });
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const box = document.getElementById("searchResults");
+  if (!box) return;
+  if (!searchTerm.trim()) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  const found = state.reservations.filter(r => r.type !== "bloqueio" && reservationMatches(r, searchTerm))
+    .sort((a, b) => b.checkIn.localeCompare(a.checkIn));
+  const rows = found.slice(0, 8).map(r => {
+    const room = getRoom(r.roomId), st = reservationStatus(r), bal = reservationBalance(r);
+    const contact = [r.guestPhone, r.guestEmail, r.guestDocument ? "Doc. " + r.guestDocument : ""].filter(Boolean).map(esc).join(" · ");
+    return `<div class="sr-item" data-sr-open="${esc(r.id)}">
+      <div class="sr-top"><b>${esc(r.guestName)} ${esc(r.guestSurname)}</b><span class="sr-code">#${esc(r.code)}</span>
+        <span class="pill ${statusPillClass(st)}">${statusLabel(st)}</span></div>
+      <div class="sr-line">${esc(room ? room.name : "Quarto removido")} · ${fmtBRFull(r.checkIn)} → ${fmtBRFull(r.checkOut)} · ${reservationNights(r)} noite(s)</div>
+      <div class="sr-line">${contact || "Sem telefone, e-mail ou documento cadastrado"}</div>
+      <div class="sr-line">Total ${money(reservationTotal(r))} · ${bal > 0 ? `<span class="sr-owe">saldo ${money(bal)}</span>` : "quitado"}</div>
+    </div>`;
+  }).join("");
+  box.innerHTML = found.length
+    ? rows + (found.length > 8 ? `<div class="sr-more">+ ${found.length - 8} resultado(s). Refine a busca.</div>` : "")
+    : `<div class="sr-more">Nenhum hóspede encontrado.</div>`;
+  box.classList.remove("hidden");
+  box.querySelectorAll("[data-sr-open]").forEach(el => {
+    el.onmousedown = (e) => {
+      e.preventDefault();
+      const r = findReservation(el.getAttribute("data-sr-open"));
+      if (!r) return;
+      box.classList.add("hidden");
+      const last = addDays(state.range.start, state.range.days - 1);
+      if (r.checkIn < state.range.start || r.checkIn > last) { state.range.start = addDays(r.checkIn, -1); saveLocal(); render(); }
+      openDetail(r.id);
+    };
   });
 }
 
@@ -1296,6 +1342,7 @@ function hideModal() {
   document.getElementById("modalContent").innerHTML = "";
 }
 document.addEventListener("click", (e) => {
+  if (!e.target.closest(".search-field")) { const b = document.getElementById("searchResults"); if (b) b.classList.add("hidden"); }
   if (e.target.id === "modalOverlay") hideModal();
   if (e.target.closest("[data-close-modal]")) hideModal();
 });
