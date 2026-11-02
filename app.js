@@ -4,10 +4,10 @@
    Firestore (sincronização em tempo real entre toda a equipe).
    ============================================================ */
 
-import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261028a";
+import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261102b";
 
 const STORAGE_KEY = "pms_cantua_v1";
-const APP_VERSION = "20261028a";
+const APP_VERSION = "20261102b";
 
 /* ================= Sincronização em nuvem (Firebase Firestore) =================
    Preencha com as credenciais do seu projeto Firebase (Configurações do
@@ -28,15 +28,70 @@ let cloudDocRef = null;
 let cloudEnabled = false;
 let applyingRemoteUpdate = false;
 
+/* ---------- Acesso: só entra quem tem o login da equipe ---------- */
+// Login da equipe: desligado a pedido (sistema abre direto). Para exigir e-mail e senha,
+// troque para true e use regras do Firebase que exijam usuário autenticado.
+const REQUIRE_LOGIN = false;
+let authed = !REQUIRE_LOGIN, authApi = null, cloudStarted = false;
+const LOGIN_EMAIL_KEY = "pms_cantua_login_email";
+function showLoginGate(msg) {
+  const app = document.getElementById("app");
+  if (!app) return;
+  const saved = (() => { try { return localStorage.getItem(LOGIN_EMAIL_KEY) || ""; } catch (e) { return ""; } })();
+  app.innerHTML = `<div class="login-wrap"><div class="login-card">
+    <img src="Logo.png" alt="Cantuá" class="login-logo">
+    <h2>Acesso da equipe</h2>
+    <p>${msg ? esc(msg) : "Entre com o e-mail e a senha da equipe para ver as reservas."}</p>
+    ${authApi ? `<form id="loginForm">
+      <div class="field"><label>E-mail</label><input type="email" name="email" required autocomplete="username" value="${esc(saved)}"></div>
+      <div class="field"><label>Senha</label><input type="password" name="password" required autocomplete="current-password"></div>
+      <button type="submit" class="btn btn-primary" id="btnLogin">Entrar</button>
+      <div class="login-msg" id="loginMsg"></div>
+    </form>` : ""}
+  </div></div>`;
+  const form = document.getElementById("loginForm");
+  if (!form) return;
+  form.querySelector(saved ? "[name=password]" : "[name=email]").focus();
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const email = form.email.value.trim(), pass = form.password.value;
+    const btn = document.getElementById("btnLogin"), out = document.getElementById("loginMsg");
+    btn.disabled = true; out.textContent = "";
+    try {
+      await authApi.signIn(authApi.auth, email, pass);
+      try { localStorage.setItem(LOGIN_EMAIL_KEY, email); } catch (e) { /* sem armazenamento */ }
+    } catch (err) {
+      const c = (err && err.code) || "";
+      out.textContent = /invalid-credential|wrong-password|user-not-found|invalid-email/.test(c) ? "E-mail ou senha incorretos."
+        : c === "auth/too-many-requests" ? "Muitas tentativas. Aguarde alguns minutos e tente de novo."
+        : c === "auth/network-request-failed" ? "Sem conexão com a internet."
+        : c === "auth/operation-not-allowed" ? "O login por e-mail e senha ainda não foi ativado no Firebase."
+        : "Não foi possível entrar. Tente de novo.";
+      btn.disabled = false;
+    }
+  };
+}
+async function signOutNow() {
+  if (authApi) {
+    if (!pushPending && !logPending.length) { try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ok */ } }
+    try { await authApi.signOut(authApi.auth); } catch (e) { /* ok */ }
+  }
+  location.reload();
+}
+
 async function initCloudSync() {
   if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "COLOQUE_AQUI") {
+    authed = true; document.body.classList.remove("locked");
     setSyncStatus("offline", "Modo local (Firebase não configurado)");
+    render();
+    if (!getUserName()) openNameModal(true);
     return;
   }
   try {
-    const [{ initializeApp }, fs] = await Promise.all([
+    const [{ initializeApp }, fs, au] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js"),
+      REQUIRE_LOGIN ? import("https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js") : Promise.resolve(null),
     ]);
     const fbApp = initializeApp(firebaseConfig);
     cloudDb = fs.getFirestore(fbApp);
@@ -46,7 +101,26 @@ async function initCloudSync() {
       collection: fs.collection, query: fs.query, orderBy: fs.orderBy, limit: fs.limit,
       serverTimestamp: fs.serverTimestamp,
     };
+    if (!REQUIRE_LOGIN) { startCloudSession(); return; }
+    const auth = au.getAuth(fbApp);
+    authApi = { auth, signOut: au.signOut, signIn: au.signInWithEmailAndPassword };
+    au.onAuthStateChanged(auth, (user) => {
+      if (user) startCloudSession();
+      else { authed = false; document.body.classList.add("locked"); showLoginGate(); }
+    });
+  } catch (e) {
+    console.error("Falha ao iniciar:", e);
+    if (REQUIRE_LOGIN) showLoginGate("Não foi possível conectar. Verifique a internet e recarregue a página.");
+    else { setSyncStatus("offline", "Sem conexão com a nuvem"); render(); if (!getUserName()) openNameModal(true); }
+  }
+}
 
+async function startCloudSession() {
+  if (cloudStarted) return;
+  cloudStarted = true; authed = true;
+  document.body.classList.remove("locked");
+  updateUserChip();
+  try {
     setSyncStatus("syncing", "Conectando...");
     const snap = await cloudFns.getDoc(cloudDocRef);
     if (snap.exists()) {
@@ -62,6 +136,7 @@ async function initCloudSync() {
     cloudEnabled = true;
     setSyncStatus("online", "Sincronizado com a equipe");
     render();
+    if (!getUserName()) openNameModal(true);
     scheduleFlush(200);
     if (currentView === "historico") startHistoryListener();
 
@@ -87,6 +162,8 @@ async function initCloudSync() {
   } catch (e) {
     console.error("Falha ao iniciar sincronização:", e);
     setSyncStatus("offline", "Sem conexão com a nuvem");
+    render();
+    if (!getUserName()) openNameModal(true);
   }
 }
 let cloudFns = null;
@@ -139,12 +216,14 @@ function openNameModal(locked) {
   </div>
   <form id="nameForm">
     <div class="modal-body"><div class="field"><label>Seu nome</label><input type="text" name="userName" required maxlength="40" value="${esc(getUserName())}" placeholder="Ex.: Maria"></div></div>
-    <div class="modal-foot">${locked ? "" : `<button type="button" class="btn" data-close-modal>Cancelar</button>`}<button type="submit" class="btn btn-primary">Salvar</button></div>
+    <div class="modal-foot">${locked || !authApi ? "" : `<button type="button" class="btn" id="btnSignOut" style="margin-right:auto;">Sair da conta</button>`}${locked ? "" : `<button type="button" class="btn" data-close-modal>Cancelar</button>`}<button type="submit" class="btn btn-primary">Salvar</button></div>
   </form>`;
   showModal(html, "narrow");
   modalLocked = !!locked;
   const f = document.getElementById("nameForm");
   f.querySelector("[name=userName]").focus();
+  const so = document.getElementById("btnSignOut");
+  if (so) so.onclick = signOutNow;
   f.onsubmit = (ev) => {
     ev.preventDefault();
     const v = f.querySelector("[name=userName]").value.trim();
@@ -683,6 +762,7 @@ function setView(view) {
 
 /* ================= Render raiz ================= */
 function render() {
+  if (!authed) return;
   document.getElementById("propName").textContent = state.property.name;
   const app = document.getElementById("app");
   if (currentView === "mapa") app.innerHTML = renderMapaView();
@@ -2111,9 +2191,9 @@ function init() {
   if (chip) chip.addEventListener("click", () => openNameModal(false));
   updateUserChip();
 
-  render();
+  if (REQUIRE_LOGIN) { document.body.classList.add("locked"); showLoginGate("Verificando acesso..."); }
+  else render();
   initCloudSync();
-  if (!getUserName()) openNameModal(true);
   if (logPending.length) scheduleFlush(2000);
 }
 
