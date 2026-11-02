@@ -4,10 +4,11 @@
    Firestore (sincronização em tempo real entre toda a equipe).
    ============================================================ */
 
-import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261102b";
+import { buildLedger, ledgerTotal, buildMonthly, buildConsumption, fmtDateTimeBR, fmtDateBR, monthOfMs, monthLabel } from "./finance.js?v=20261102c";
+import { diffState, removalsOnly, stableStringify, stripUi, groupOf, GROUP_LABEL, isDanger } from "./audit.js?v=20261102c";
 
 const STORAGE_KEY = "pms_cantua_v1";
-const APP_VERSION = "20261102b";
+const APP_VERSION = "20261102c";
 
 /* ================= Sincronização em nuvem (Firebase Firestore) =================
    Preencha com as credenciais do seu projeto Firebase (Configurações do
@@ -233,6 +234,163 @@ function openNameModal(locked) {
     hideModal();
     toast(`Olá, ${v}!`);
   };
+}
+
+/* ================= Análise financeira simplificada ================= */
+let finTab = "lancamentos", fatTab = "mes";
+const ledgerFilter = { q: "", method: "", month: "", desc: false };
+let consMonth = "", consSort = "qty";
+
+function downloadCsv(filename, rows) {
+  const safe = v => { v = String(v ?? ""); return /^[=+\-@]/.test(v) ? "'" + v : v; };
+  const q = v => `"${safe(v).replace(/"/g, '""')}"`;
+  const blob = new Blob(["\uFEFF" + rows.map(r => r.map(q).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const brNum = v => Number(v).toFixed(2).replace(".", ",");
+
+function renderFinanceiroView() {
+  return `<div class="page-head">
+    <div><div class="page-title">Análise financeira</div><div class="page-subtitle">Versão simplificada, com tudo o que foi lançado desde o primeiro dia de uso.</div></div>
+    <button class="btn" id="btnFinExport">${icon("download", 14)} Exportar CSV</button>
+  </div>
+  <div class="subtabs">
+    <button class="subtab ${finTab === "lancamentos" ? "active" : ""}" data-fin-tab="lancamentos">Lançamentos</button>
+    <button class="subtab ${finTab === "faturamento" ? "active" : ""}" data-fin-tab="faturamento">Faturamento</button>
+  </div>
+  <div id="finBody">${finTab === "lancamentos" ? renderLedgerTab() : renderFaturamentoTab()}</div>`;
+}
+
+/* ---------- Lançamentos ---------- */
+function renderLedgerTab() {
+  const all = buildLedger(state);
+  const methods = [...new Set(all.map(x => x.method))].sort();
+  const months = [...new Set(all.map(x => monthOfMs(x.ms)))].sort();
+  return `<div class="controls-row">
+    <div class="field search-field">${icon("search")}<input type="text" id="ledgerSearch" placeholder="Buscar hóspede" value="${esc(ledgerFilter.q)}" autocomplete="off"></div>
+    <div class="field"><select id="ledgerMonth"><option value="">Todos os meses</option>${months.map(m => `<option value="${m}" ${ledgerFilter.month === m ? "selected" : ""}>${monthLabel(m)}</option>`).join("")}</select></div>
+    <div class="field"><select id="ledgerMethod"><option value="">Todas as formas</option>${methods.map(m => `<option value="${esc(m)}" ${ledgerFilter.method === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>
+    <div class="toolbar-spacer"></div>
+    <button class="btn btn-sm" id="ledgerOrder">${icon("arrows", 13)} <span id="ledgerOrderLabel"></span></button>
+  </div>
+  <div id="ledgerBox"></div>`;
+}
+
+function filteredLedger() {
+  const q = ledgerFilter.q.trim().toLowerCase();
+  let rows = buildLedger(state).filter(x =>
+    (!ledgerFilter.method || x.method === ledgerFilter.method) &&
+    (!ledgerFilter.month || monthOfMs(x.ms) === ledgerFilter.month) &&
+    (!q || x.guest.toLowerCase().includes(q) || String(x.code).includes(q)));
+  if (ledgerFilter.desc) rows = rows.reverse();
+  return rows;
+}
+
+function renderLedgerRows() {
+  const box = document.getElementById("ledgerBox");
+  if (!box) return;
+  const lbl = document.getElementById("ledgerOrderLabel");
+  if (lbl) lbl.textContent = ledgerFilter.desc ? "Mais recentes primeiro" : "Ordem de lançamento (mais antigos primeiro)";
+  const rows = filteredLedger();
+  if (!rows.length) { box.innerHTML = `<div class="empty-msg">Nenhum lançamento encontrado.</div>`; return; }
+  const est = rows.filter(x => x.estornado).length;
+  box.innerHTML = `<div class="fin-wrap"><table class="fin-table">
+    <thead><tr><th>Check-in / Check-out</th><th>Hóspede</th><th>Data do lançamento</th><th class="num">Valor</th><th>Forma de pagamento</th></tr></thead>
+    <tbody>${rows.map(x => `<tr class="${x.estornado ? "estornado" : ""}">
+      <td>${fmtDateBR(x.checkIn)} → ${fmtDateBR(x.checkOut)}</td>
+      <td>${esc(x.guest)} <span class="fin-code">#${esc(x.code)}</span></td>
+      <td>${fmtDateTimeBR(x.ms)}</td>
+      <td class="num">${money(x.amount)}</td>
+      <td>${esc(x.method)}${x.estornado ? ` <span class="pill pill-amber">Estornado</span>` : ""}</td>
+    </tr>`).join("")}</tbody>
+    <tfoot><tr><td colspan="3">${rows.length} lançamento(s)${est ? ` · ${est} estornado(s), que não entram na soma` : ""}</td><td class="num">${money(ledgerTotal(rows))}</td><td></td></tr></tfoot>
+  </table></div>`;
+}
+
+/* ---------- Faturamento ---------- */
+function renderFaturamentoTab() {
+  const m = buildMonthly(state, monthOfMs(Date.now()));
+  const t = m.totals;
+  const aReceber = +(t.total - t.recebido).toFixed(2);
+  return `<div class="fin-kpis">
+    <div class="kpi kpi-main"><div class="kpi-k">Total que entrou na pousada</div><div class="kpi-v">${money(t.recebido)}</div><div class="kpi-s">todos os pagamentos, sem os estornos</div></div>
+    <div class="kpi"><div class="kpi-k">Total faturado</div><div class="kpi-v">${money(t.total)}</div><div class="kpi-s">hospedagem ${money(t.hospedagem)} · consumo ${money(t.consumo)}</div></div>
+    <div class="kpi"><div class="kpi-k">Ainda a receber</div><div class="kpi-v">${money(aReceber)}</div><div class="kpi-s">faturado menos o que já entrou</div></div>
+  </div>
+  <div class="subtabs sub2">
+    <button class="subtab ${fatTab === "mes" ? "active" : ""}" data-fat-tab="mes">Resumo por mês</button>
+    <button class="subtab ${fatTab === "consumo" ? "active" : ""}" data-fat-tab="consumo">Consumo mais vendido</button>
+  </div>
+  ${fatTab === "mes" ? renderMonthlyTable(m) : renderConsumptionTab()}`;
+}
+
+function renderMonthlyTable(m) {
+  return `<div class="fin-wrap"><table class="fin-table">
+    <thead><tr><th>Mês</th><th class="num">Entrou (recebido)</th><th class="num">Hospedagem</th><th class="num">Consumo</th><th class="num">Total faturado</th></tr></thead>
+    <tbody>${m.rows.map(r => `<tr class="${r.previsto ? "previsto" : ""}">
+      <td>${monthLabel(r.month)}${r.previsto ? ` <span class="pill pill-gray">previsto</span>` : ""}</td>
+      <td class="num">${money(r.recebido)}</td><td class="num">${money(r.hospedagem)}</td><td class="num">${money(r.consumo)}</td><td class="num"><b>${money(r.total)}</b></td>
+    </tr>`).join("")}</tbody>
+    <tfoot><tr><td>Total de todo o período</td><td class="num">${money(m.totals.recebido)}</td><td class="num">${money(m.totals.hospedagem)}</td><td class="num">${money(m.totals.consumo)}</td><td class="num">${money(m.totals.total)}</td></tr></tfoot>
+  </table></div>
+  <div class="fin-note"><b>Como ler:</b> "Entrou" é o que foi pago, pelo mês em que o pagamento foi lançado. "Hospedagem" conta cada diária no mês da noite (inclui cama extra e ajustes manuais). "Consumo" conta pelo mês em que foi lançado. "Previsto" são meses que ainda não chegaram, com reservas já feitas.</div>`;
+}
+
+function renderConsumptionTab() {
+  const months = buildMonthly(state, "").rows.filter(r => r.consumo > 0).map(r => r.month);
+  const c = buildConsumption(state, consMonth);
+  const items = c.items.sort((a, b) => consSort === "qty" ? (b.qty - a.qty || b.total - a.total) : (b.total - a.total || b.qty - a.qty));
+  const max = items.length ? (consSort === "qty" ? items[0].qty : items[0].total) : 1;
+  return `<div class="controls-row">
+    <div class="field"><select id="consMonth"><option value="">Todo o período</option>${months.map(m => `<option value="${m}" ${consMonth === m ? "selected" : ""}>${monthLabel(m)}</option>`).join("")}</select></div>
+    <div class="field"><select id="consSort"><option value="qty" ${consSort === "qty" ? "selected" : ""}>Mais consumidos (quantidade)</option><option value="total" ${consSort === "total" ? "selected" : ""}>Maior valor</option></select></div>
+  </div>
+  ${items.length ? `<div class="fin-wrap"><table class="fin-table">
+    <thead><tr><th>#</th><th>Item</th><th class="num">Quantidade</th><th class="num">Valor</th><th class="bar-col"></th></tr></thead>
+    <tbody>${items.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td class="num">${x.qty}</td><td class="num">${money(x.total)}</td>
+      <td class="bar-col"><div class="mini-bar"><span style="width:${Math.max(2, Math.round(((consSort === "qty" ? x.qty : x.total) / max) * 100))}%"></span></div></td></tr>`).join("")}</tbody>
+    <tfoot><tr><td></td><td>Total do consumo</td><td class="num">${c.totalQty}</td><td class="num">${money(c.totalValue)}</td><td></td></tr></tfoot>
+  </table></div>` : `<div class="empty-msg">Nenhum consumo lançado neste período.</div>`}`;
+}
+
+function bindFinanceiroEvents() {
+  document.querySelectorAll("[data-fin-tab]").forEach(b => { b.onclick = () => { finTab = b.getAttribute("data-fin-tab"); render(); }; });
+  document.querySelectorAll("[data-fat-tab]").forEach(b => { b.onclick = () => { fatTab = b.getAttribute("data-fat-tab"); render(); }; });
+  const body = document.getElementById("finBody");
+  if (finTab === "lancamentos") {
+    renderLedgerRows();
+    document.getElementById("ledgerSearch").oninput = e => { ledgerFilter.q = e.target.value; renderLedgerRows(); };
+    document.getElementById("ledgerMonth").onchange = e => { ledgerFilter.month = e.target.value; renderLedgerRows(); };
+    document.getElementById("ledgerMethod").onchange = e => { ledgerFilter.method = e.target.value; renderLedgerRows(); };
+    document.getElementById("ledgerOrder").onclick = () => { ledgerFilter.desc = !ledgerFilter.desc; renderLedgerRows(); };
+  } else if (fatTab === "consumo") {
+    document.getElementById("consMonth").onchange = e => { consMonth = e.target.value; body.innerHTML = renderFaturamentoTab(); bindFinanceiroEvents(); };
+    document.getElementById("consSort").onchange = e => { consSort = e.target.value; body.innerHTML = renderFaturamentoTab(); bindFinanceiroEvents(); };
+  }
+  document.getElementById("btnFinExport").onclick = exportFinanceiroCsv;
+}
+
+function exportFinanceiroCsv() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (finTab === "lancamentos") {
+    const rows = filteredLedger();
+    downloadCsv(`lancamentos-cantua-${day}.csv`, [["Check-in", "Check-out", "Hóspede", "Reserva", "Data do lançamento", "Valor", "Forma de pagamento", "Situação"]]
+      .concat(rows.map(x => [fmtDateBR(x.checkIn), fmtDateBR(x.checkOut), x.guest, x.code, fmtDateTimeBR(x.ms), brNum(x.amount), x.method, x.estornado ? "Estornado" : ""])));
+  } else if (fatTab === "mes") {
+    const m = buildMonthly(state, monthOfMs(Date.now()));
+    downloadCsv(`faturamento-cantua-${day}.csv`, [["Mês", "Entrou (recebido)", "Hospedagem", "Consumo", "Total faturado", "Situação"]]
+      .concat(m.rows.map(r => [monthLabel(r.month), brNum(r.recebido), brNum(r.hospedagem), brNum(r.consumo), brNum(r.total), r.previsto ? "previsto" : ""]))
+      .concat([["Total de todo o período", brNum(m.totals.recebido), brNum(m.totals.hospedagem), brNum(m.totals.consumo), brNum(m.totals.total), ""]]));
+  } else {
+    const c = buildConsumption(state, consMonth);
+    const items = c.items.sort((a, b) => consSort === "qty" ? (b.qty - a.qty || b.total - a.total) : (b.total - a.total || b.qty - a.qty));
+    downloadCsv(`consumo-cantua-${day}.csv`, [["Posição", "Item", "Quantidade", "Valor"]]
+      .concat(items.map((x, i) => [i + 1, x.name, x.qty, brNum(x.total)]))
+      .concat([["", "Total do consumo", c.totalQty, brNum(c.totalValue)]]));
+  }
 }
 
 /* ================= Histórico de alterações ================= */
@@ -516,7 +674,7 @@ function toDate(iso) { return new Date(iso + "T00:00:00"); }
 function fmtISO(d) { return d.toISOString().slice(0, 10); }
 function addDays(iso, n) { const d = toDate(iso); d.setDate(d.getDate() + n); return fmtISO(d); }
 function daysBetween(a, b) { return Math.round((toDate(b) - toDate(a)) / 86400000); }
-function todayISO() { return fmtISO(new Date()); }
+function todayISO() { const d = new Date(), p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function fmtBR(iso) { const [y, m, d] = iso.split("-"); return `${d}/${m}`; }
 function fmtBRFull(iso) { const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; }
 const WEEKDAYS = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
@@ -768,6 +926,7 @@ function render() {
   if (currentView === "mapa") app.innerHTML = renderMapaView();
   else if (currentView === "emcasa") app.innerHTML = renderEmCasaView();
   else if (currentView === "historico") app.innerHTML = renderHistoricoView();
+  else if (currentView === "financeiro") app.innerHTML = renderFinanceiroView();
   else app.innerHTML = renderConfigView();
   bindViewEvents();
 }
@@ -1094,6 +1253,7 @@ function renderConfigView() {
    ============================================================ */
 function bindViewEvents() {
   if (currentView === "historico") bindHistoryEvents();
+  if (currentView === "financeiro") bindFinanceiroEvents();
   // Mapa
   const btnPrev = document.getElementById("btnPrevWeek");
   if (btnPrev) btnPrev.onclick = () => { state.range.start = addDays(state.range.start, -7); saveLocal(); render(); };
